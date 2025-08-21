@@ -1,0 +1,17 @@
+# Build artifacts and large files
+riscv-build-workdir/
+*.qcow2
+*.raw
+*.tar
+*.tar.gz
+
+# Log files
+*.log
+
+# IDE and OS specific files
+.vscode/
+.idea/
+*.DS_Store
+
+# Temporary files
+/tmp/

@@ -67,12 +67,12 @@ need_sudo() {
 
 ensure_host_deps() {
   msg "Installing host dependencies..."
-  apt-get update
+  apt-get update | tee "$LOGDIR/00_apt_update_host.log"
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
     debootstrap qemu-user-static binfmt-support qemu-system-misc \
     build-essential devscripts debhelper dpkg-dev fakeroot quilt \
     ubuntu-keyring debian-archive-keyring rsync e2fsprogs dosfstools \
-    parted ca-certificates curl
+    parted ca-certificates curl | tee "$LOGDIR/00_install_host_deps.log"
 }
 
 prepare_dirs() {
@@ -138,7 +138,20 @@ make_builder_base() {
   tar -C "$(dirname "$BUILDER_BASE")" -cpf "$BUILDER_SNAP" "$(basename "$BUILDER_BASE")"
 }
 
+cleanup_mounts() {
+  [[ -d "$WORKDIR/builder" ]] || return 0
+  msg "Cleaning up mount points..."
+  
+  # Check if mount points exist and are mounted before attempting umount
+  mountpoint -q "$WORKDIR/builder/dev/pts" && umount "$WORKDIR/builder/dev/pts" 2>/dev/null || true
+  mountpoint -q "$WORKDIR/builder/dev" && umount "$WORKDIR/builder/dev" 2>/dev/null || true
+  mountpoint -q "$WORKDIR/builder/sys" && umount "$WORKDIR/builder/sys" 2>/dev/null || true
+  mountpoint -q "$WORKDIR/builder/proc" && umount "$WORKDIR/builder/proc" 2>/dev/null || true
+}
+
 reset_builder() {
+  # Clean up any existing mounts before reset
+  cleanup_mounts
   rm -rf "$WORKDIR/builder"
   tar -C "$WORKDIR" -xpf "$BUILDER_SNAP"
   mv "$WORKDIR/$(basename "$BUILDER_BASE")" "$WORKDIR/builder"
@@ -154,14 +167,33 @@ build_one() {
   msg "Building from source: $pkg${ver_clause}"
   reset_builder
 
+  # Setup cleanup trap for this build
+  trap 'cleanup_mounts; exit 1' INT TERM EXIT
+
+  # Mount necessary filesystems for build
+  mount -t proc proc "$WORKDIR/builder/proc" || true
+  mount -t sysfs sysfs "$WORKDIR/builder/sys" || true  
+  mount -t devtmpfs dev "$WORKDIR/builder/dev" || true
+  mount -t devpts devpts "$WORKDIR/builder/dev/pts" || true
+
+  # Set QEMU stability configuration
+  export QEMU_CPU=rv64,sv39=off
+  
   chroot "$WORKDIR/builder" bash -lc "
     set -e
+    export DEB_BUILD_OPTIONS=\"parallel=80\"
     apt-get update
     apt-get build-dep -y ${pkg}
     apt-get source ${pkg}${ver_clause}
     cd \$(find . -maxdepth 1 -type d -name '${pkg}-*' | sort | head -n1)
-    dpkg-buildpackage -us -uc -b
+    dpkg-buildpackage -us -uc -b -j80
   " | tee "$LOGDIR/20_build_${pkg}.log"
+
+  # Normal cleanup (trap will also handle emergency cleanup)
+  cleanup_mounts
+
+  # Clear trap after successful cleanup
+  trap - INT TERM EXIT
 
   mkdir -p "$OUTDIR/$pkg"
   find "$WORKDIR/builder" -maxdepth 1 -type f -name '*.deb' -exec cp {} "$OUTDIR/$pkg/" \;
@@ -188,18 +220,49 @@ build_and_install_loop() {
   done
 }
 
+validate_img_name() {
+  # Prevent overwriting system files
+  case "$IMG_NAME" in
+    /dev/*|/sys/*|/proc/*|/etc/*|/bin/*|/sbin/*|/usr/*|/var/*|/tmp/*)
+      err "IMG_NAME cannot point to system directories: $IMG_NAME"
+      exit 1
+      ;;
+    /*)
+      # Absolute path - ensure parent directory exists and is writable
+      local parent_dir
+      parent_dir=$(dirname "$IMG_NAME")
+      if [[ ! -w "$parent_dir" ]]; then
+        err "Cannot write to directory: $parent_dir"
+        exit 1
+      fi
+      ;;
+  esac
+}
+
 make_qcow2() {
+  validate_img_name
   msg "Creating qcow2 image: $IMG_NAME ($IMG_SIZE)"
   local tmpdir; tmpdir=$(mktemp -d)
   local raw="$tmpdir/root.raw"
-  truncate -s "$IMG_SIZE" "$raw"
-  mkfs.ext4 -F "$raw" >/dev/null
-  mount -o loop "$raw" "$tmpdir"
-  rsync -aHAX "$TARGET_ROOTFS"/ "$tmpdir"/
-  echo "/dev/vda / ext4 defaults 0 1" > "$tmpdir/etc/fstab"
-  umount "$tmpdir"
-  qemu-img convert -f raw -O qcow2 "$raw" "$IMG_NAME"
-  rm -rf "$tmpdir"
+  {
+    echo "[$(date)] Creating raw image: $raw ($IMG_SIZE)"
+    truncate -s "$IMG_SIZE" "$raw"
+    echo "[$(date)] Formatting with ext4"
+    mkfs.ext4 -F "$raw"
+    echo "[$(date)] Mounting raw image at: $tmpdir"
+    mount -o loop "$raw" "$tmpdir"
+    echo "[$(date)] Syncing rootfs contents"
+    rsync -aHAX "$TARGET_ROOTFS"/ "$tmpdir"/
+    echo "[$(date)] Creating fstab"
+    echo "/dev/vda / ext4 defaults 0 1" > "$tmpdir/etc/fstab"
+    echo "[$(date)] Unmounting"
+    umount "$tmpdir"
+    echo "[$(date)] Converting to qcow2"
+    qemu-img convert -f raw -O qcow2 "$raw" "$IMG_NAME"
+    echo "[$(date)] Cleaning up"
+    rm -rf "$tmpdir"
+    echo "[$(date)] Image creation completed: $IMG_NAME"
+  } | tee "$LOGDIR/50_qcow2_creation.log"
   msg "Image created: $IMG_NAME"
 }
 
@@ -232,15 +295,44 @@ record_minimal_logs() {
 
 main() {
   need_sudo
-  ensure_host_deps
   prepare_dirs
+  
+  # Setup global cleanup trap
+  trap 'cleanup_mounts; err "Build interrupted - cleaning up mounts"; exit 1' INT TERM
+  
+  # Start comprehensive logging
+  {
+    echo "========================================"
+    echo "RISC-V Ubuntu Build Started: $(date)"
+    echo "========================================"
+    echo "Host: $(uname -a)"
+    echo "Script: $0"
+    echo "Args: $*"
+    echo "Config:"
+    echo "  SUITE=$SUITE"
+    echo "  ARCH=$ARCH"
+    echo "  WORKDIR=$WORKDIR"
+    echo "  PKGS=$PKGS"
+    echo "========================================"
+    echo ""
+  } | tee "$LOGDIR/00_main_execution.log"
+  
+  ensure_host_deps
   make_target_rootfs
   make_builder_base
   build_and_install_loop
   make_qcow2
   record_minimal_logs
   print_boot_help
-  msg "DONE."
+  
+  {
+    echo ""
+    echo "========================================"
+    echo "RISC-V Ubuntu Build Completed: $(date)"
+    echo "========================================"
+  } | tee -a "$LOGDIR/00_main_execution.log"
+  
+  msg "DONE. Full logs available in: $LOGDIR/"
 }
 
 main "$@"

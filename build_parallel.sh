@@ -23,11 +23,11 @@ set -euo pipefail
 #  bash coreutils grep sed findutils tar xz-utils 
 #  util-linux iproute2 netbase ca-certificates iputils-ping
 #  openssh-server binutils gdb
-#)  binutils iputils-ping openssh-server  
+#) 
 
 # Default package list
 PACKAGES=(
-  coreutils tar 
+  coreutils tar binutils iputils-ping openssh-server  
 )
 
 # Parse argument: clean, number (parallel) or package name (single)
@@ -102,6 +102,7 @@ declare -a BUILD_PIDS=()
 declare -a BUILD_DIRS=()
 declare -a BUILD_PACKAGES=()
 declare -a BUILD_STATUS=()
+declare -a BUILD_START_TIMES=()
 
 # Function to start a build job
 start_build() {
@@ -114,12 +115,14 @@ start_build() {
   # Start build in background
   "$(dirname "$0")/build_single_package.sh" "$pkg" "$build_dir" &
   local pid=$!
+  local start_time=$(date +%s)
   
   # Store job info
   BUILD_PIDS+=($pid)
   BUILD_DIRS+=("$build_dir")
   BUILD_PACKAGES+=("$pkg")
   BUILD_STATUS+=("RUNNING")
+  BUILD_START_TIMES+=($start_time)
   
   msg "Job $job_id started: PID=$pid, Package=$pkg"
 }
@@ -150,15 +153,22 @@ wait_for_completion() {
   for i in "${!BUILD_PIDS[@]}"; do
     if [[ "${BUILD_PIDS[$i]}" == "$completed_pid" ]]; then
       local pkg="${BUILD_PACKAGES[$i]}"
+      local start_time="${BUILD_START_TIMES[$i]}"
+      local end_time=$(date +%s)
+      local duration=$((end_time - start_time))
+      local hours=$((duration / 3600))
+      local minutes=$(((duration % 3600) / 60))
+      local seconds=$((duration % 60))
+      
       if [[ $exit_code -eq 0 ]]; then
         BUILD_STATUS[$i]="SUCCESS"
-        msg "Job completed successfully: $pkg (PID=$completed_pid)"
+        msg "Job completed successfully: $pkg (PID=$completed_pid, ${hours}h ${minutes}m ${seconds}s)"
       elif [[ $exit_code -eq 2 ]]; then
         BUILD_STATUS[$i]="SKIPPED"
-        msg "Job skipped (already built): $pkg (PID=$completed_pid)"
+        msg "Job skipped (already built): $pkg (PID=$completed_pid, ${hours}h ${minutes}m ${seconds}s)"
       else
         BUILD_STATUS[$i]="FAILED"
-        err "Job failed: $pkg (PID=$completed_pid, exit_code=$exit_code)"
+        err "Job failed: $pkg (PID=$completed_pid, exit_code=$exit_code, ${hours}h ${minutes}m ${seconds}s)"
       fi
       return $i # Return the index of the completed job
     fi
@@ -188,6 +198,10 @@ count_running() {
 
 # Main execution
 job_id=1
+total_build_start=$(date +%s)
+total_build_start_readable=$(date)
+
+msg "Total build started at: $total_build_start_readable"
 
 # Process all packages
 for pkg in "${PACKAGES[@]}"; do
@@ -211,7 +225,7 @@ done
 # Report results
 msg "All builds completed. Summary:"
 echo "=================================================="
-printf "%-20s %-10s %-30s\n" "PACKAGE" "STATUS" "BUILD_DIR"
+printf "%-20s %-10s %-12s %-30s\n" "PACKAGE" "STATUS" "BUILD_TIME" "BUILD_DIR"
 echo "=================================================="
 
 success_count=0
@@ -222,8 +236,27 @@ for i in "${!BUILD_PACKAGES[@]}"; do
   local pkg="${BUILD_PACKAGES[$i]}"
   local status="${BUILD_STATUS[$i]}"
   local build_dir="${BUILD_DIRS[$i]}"
+  local start_time="${BUILD_START_TIMES[$i]}"
   
-  printf "%-20s %-10s %-30s\n" "$pkg" "$status" "$build_dir"
+  # Calculate individual build time
+  local duration_str="N/A"
+  if [[ -n "$start_time" ]]; then
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local hours=$((duration / 3600))
+    local minutes=$(((duration % 3600) / 60))
+    local seconds=$((duration % 60))
+    
+    if [[ $hours -gt 0 ]]; then
+      duration_str="${hours}h${minutes}m"
+    elif [[ $minutes -gt 0 ]]; then
+      duration_str="${minutes}m${seconds}s"
+    else
+      duration_str="${seconds}s"
+    fi
+  fi
+  
+  printf "%-20s %-10s %-12s %-30s\n" "$pkg" "$status" "$duration_str" "$build_dir"
   
   if [[ "$status" == "SUCCESS" ]]; then
     ((success_count++))
@@ -235,7 +268,16 @@ for i in "${!BUILD_PACKAGES[@]}"; do
 done
 
 echo "=================================================="
+
+# Calculate and display total build time
+total_build_end=$(date +%s)
+total_build_duration=$((total_build_end - total_build_start))
+total_hours=$((total_build_duration / 3600))
+total_minutes=$(((total_build_duration % 3600) / 60))
+total_seconds=$((total_build_duration % 60))
+
 msg "Build Summary: $success_count successful, $skipped_count skipped, $failed_count failed"
+msg "Total build time: ${total_hours}h ${total_minutes}m ${total_seconds}s (${total_build_duration}s)"
 
 if [[ $failed_count -gt 0 ]]; then
   err "Some builds failed. Check individual build directories for logs."

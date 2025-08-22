@@ -156,15 +156,79 @@ make_builder_base() {
   tar -C "$(dirname "$BUILDER_BASE")" -cpf "$BUILDER_SNAP" "$(basename "$BUILDER_BASE")"
 }
 
+safe_umount_single() {
+  local mount_point="$1"
+  local max_retries="${2:-3}"
+  local retry_count=0
+  
+  # Check if mount point exists and is mounted
+  if [[ ! -d "$mount_point" ]] || ! mountpoint -q "$mount_point" 2>/dev/null; then
+    return 0
+  fi
+  
+  while [[ $retry_count -lt $max_retries ]]; do
+    # Check for processes using this mount point
+    if command -v lsof >/dev/null 2>&1; then
+      local lsof_result
+      lsof_result=$(lsof +D "$mount_point" 2>/dev/null || true)
+      if [[ -n "$lsof_result" ]]; then
+        warn "Mount point $mount_point is in use, waiting..."
+        sleep 2
+        ((retry_count++))
+        continue
+      fi
+    fi
+    
+    # Try normal umount first
+    if umount "$mount_point" 2>/dev/null; then
+      return 0
+    fi
+    
+    # Try lazy umount
+    if umount -l "$mount_point" 2>/dev/null; then
+      warn "Used lazy umount for: $mount_point"
+      return 0
+    fi
+    
+    ((retry_count++))
+    if [[ $retry_count -lt $max_retries ]]; then
+      warn "Umount failed for $mount_point, retrying in 1 second..."
+      sleep 1
+    fi
+  done
+  
+  warn "Failed to unmount $mount_point after $max_retries attempts"
+  return 1
+}
+
 cleanup_mounts() {
   [[ -d "$BUILDER_WORK" ]] || return 0
   msg "Cleaning up mount points..."
   
-  # Check if mount points exist and are mounted before attempting umount
-  mountpoint -q "$BUILDER_WORK/dev/pts" 2>/dev/null && umount "$BUILDER_WORK/dev/pts" 2>/dev/null || true
-  mountpoint -q "$BUILDER_WORK/dev" 2>/dev/null && umount "$BUILDER_WORK/dev" 2>/dev/null || true
-  mountpoint -q "$BUILDER_WORK/sys" 2>/dev/null && umount "$BUILDER_WORK/sys" 2>/dev/null || true
-  mountpoint -q "$BUILDER_WORK/proc" 2>/dev/null && umount "$BUILDER_WORK/proc" 2>/dev/null || true
+  # Install lsof if not available for safer cleanup
+  if ! command -v lsof >/dev/null 2>&1; then
+    apt-get install -y lsof >/dev/null 2>&1 || true
+  fi
+  
+  # Unmount in reverse order (deepest first)
+  local mount_points=(
+    "$BUILDER_WORK/dev/pts"
+    "$BUILDER_WORK/dev"
+    "$BUILDER_WORK/sys"
+    "$BUILDER_WORK/proc"
+  )
+  
+  local failed_count=0
+  for mount_point in "${mount_points[@]}"; do
+    if ! safe_umount_single "$mount_point" 3; then
+      ((failed_count++))
+    fi
+  done
+  
+  if [[ $failed_count -gt 0 ]]; then
+    warn "$failed_count mount points could not be cleaned up properly"
+    return 1
+  fi
 }
 
 reset_builder() {
@@ -195,11 +259,20 @@ setup_mounts() {
   }
   
   msg "Mounting /dev..."
-  mount --bind /dev "$BUILDER_WORK/dev" || {
-    err "Failed to mount /dev - aborting to prevent system contamination"
+  # Use private mount namespace to prevent host contamination
+  mount -t tmpfs tmpfs "$BUILDER_WORK/dev" || {
+    err "Failed to create tmpfs /dev - aborting to prevent system contamination"
     cleanup_mounts
     exit 1
   }
+  
+  # Create essential device nodes
+  mknod "$BUILDER_WORK/dev/null" c 1 3
+  mknod "$BUILDER_WORK/dev/zero" c 1 5
+  mknod "$BUILDER_WORK/dev/random" c 1 8
+  mknod "$BUILDER_WORK/dev/urandom" c 1 9
+  mknod "$BUILDER_WORK/dev/tty" c 5 0
+  chmod 666 "$BUILDER_WORK/dev/null" "$BUILDER_WORK/dev/zero" "$BUILDER_WORK/dev/random" "$BUILDER_WORK/dev/urandom" "$BUILDER_WORK/dev/tty"
   
   msg "Creating essential /dev entries..."
   # Ensure critical /dev entries exist
@@ -209,11 +282,15 @@ setup_mounts() {
   [[ -d "$BUILDER_WORK/dev/fd" ]] || ln -sf /proc/self/fd "$BUILDER_WORK/dev/fd"
   
   msg "Mounting /dev/pts..."
-  mount --bind /dev/pts "$BUILDER_WORK/dev/pts" || mount -t devpts devpts "$BUILDER_WORK/dev/pts" || {
+  mkdir -p "$BUILDER_WORK/dev/pts"
+  mount -t devpts -o newinstance,ptmxmode=0666,mode=620,gid=5 devpts "$BUILDER_WORK/dev/pts" || {
     err "Failed to mount /dev/pts - aborting to prevent system contamination"
     cleanup_mounts
     exit 1
   }
+  # Create ptmx device
+  mknod "$BUILDER_WORK/dev/ptmx" c 5 2
+  chmod 666 "$BUILDER_WORK/dev/ptmx"
 }
 
 build_package() {
@@ -261,6 +338,18 @@ build_package() {
     export DEB_BUILD_OPTIONS=\"parallel=$BUILD_PARALLEL\"
     export DEBIAN_FRONTEND=noninteractive
     export SYSTEMD_OFFLINE=1
+    
+    # Fix RISC-V configure issues for GNU packages (tar, coreutils, etc.)
+    # These functions exist but runtime tests fail in QEMU emulation
+    export ac_cv_func_mkfifoat=yes
+    export ac_cv_func_mknodat=yes
+    export ac_cv_func_openat=yes
+    export ac_cv_func_fstatat=yes
+    export ac_cv_func_unlinkat=yes
+    export ac_cv_func_renameat=yes
+    export ac_cv_func_symlinkat=yes
+    export ac_cv_func_readlinkat=yes
+    
     dpkg --configure -a || true
     apt-get update
     apt-get build-dep -y ${pkg}

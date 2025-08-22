@@ -170,23 +170,58 @@ build_one() {
   # Setup cleanup trap for this build
   trap 'cleanup_mounts; exit 1' INT TERM EXIT
 
-  # Mount necessary filesystems for build
-  mount -t proc proc "$WORKDIR/builder/proc" || true
-  mount -t sysfs sysfs "$WORKDIR/builder/sys" || true  
-  mount -t devtmpfs dev "$WORKDIR/builder/dev" || true
-  mount -t devpts devpts "$WORKDIR/builder/dev/pts" || true
+  # Mount necessary filesystems for build (fail if any mount fails)
+  mkdir -p "$WORKDIR/builder/proc" "$WORKDIR/builder/sys" "$WORKDIR/builder/dev/pts"
+  
+  msg "Mounting /proc..."
+  mount --bind /proc "$WORKDIR/builder/proc" || mount -t proc proc "$WORKDIR/builder/proc" || {
+    err "Failed to mount /proc - aborting to prevent system contamination"
+    exit 1
+  }
+  
+  msg "Mounting /sys..."
+  mount --bind /sys "$WORKDIR/builder/sys" || mount -t sysfs sysfs "$WORKDIR/builder/sys" || {
+    err "Failed to mount /sys - aborting to prevent system contamination"
+    cleanup_mounts
+    exit 1
+  }
+  
+  msg "Mounting /dev..."
+  mount --bind /dev "$WORKDIR/builder/dev" || {
+    err "Failed to mount /dev - aborting to prevent system contamination"
+    cleanup_mounts
+    exit 1
+  }
+  
+  msg "Creating essential /dev entries..."
+  # Ensure critical /dev entries exist
+  [[ -e "$WORKDIR/builder/dev/stdin" ]] || ln -sf /proc/self/fd/0 "$WORKDIR/builder/dev/stdin"
+  [[ -e "$WORKDIR/builder/dev/stdout" ]] || ln -sf /proc/self/fd/1 "$WORKDIR/builder/dev/stdout"
+  [[ -e "$WORKDIR/builder/dev/stderr" ]] || ln -sf /proc/self/fd/2 "$WORKDIR/builder/dev/stderr"
+  [[ -d "$WORKDIR/builder/dev/fd" ]] || ln -sf /proc/self/fd "$WORKDIR/builder/dev/fd"
+  
+  msg "Mounting /dev/pts..."
+  mount --bind /dev/pts "$WORKDIR/builder/dev/pts" || mount -t devpts devpts "$WORKDIR/builder/dev/pts" || {
+    err "Failed to mount /dev/pts - aborting to prevent system contamination"
+    cleanup_mounts
+    exit 1
+  }
 
-  # Set QEMU stability configuration
-  export QEMU_CPU=rv64,sv39=off
+  # Set QEMU stability configuration  
+  export QEMU_CPU=rv64
   
   chroot "$WORKDIR/builder" bash -lc "
     set -e
-    export DEB_BUILD_OPTIONS=\"parallel=80\"
+    export DEB_BUILD_OPTIONS=\"parallel=1 reproducible=+all\"
+    export DEBIAN_FRONTEND=noninteractive
+    export SYSTEMD_OFFLINE=1
+    export SOURCE_DATE_EPOCH=1640995200  # Fixed timestamp for reproducibility
+    dpkg --configure -a || true
     apt-get update
     apt-get build-dep -y ${pkg}
     apt-get source ${pkg}${ver_clause}
     cd \$(find . -maxdepth 1 -type d -name '${pkg}-*' | sort | head -n1)
-    dpkg-buildpackage -us -uc -b -j80
+    dpkg-buildpackage -us -uc -b -j1
   " | tee "$LOGDIR/20_build_${pkg}.log"
 
   # Normal cleanup (trap will also handle emergency cleanup)

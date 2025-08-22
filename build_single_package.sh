@@ -36,7 +36,7 @@ BUILD_ROOT_DIR="${2:-$BUILD_BASE_DIR/rvbuild-$PACKAGE}"
 SUITE="${SUITE:-noble}"
 ARCH="${ARCH:-riscv64}"
 MIRROR="${MIRROR:-http://ports.ubuntu.com/ubuntu-ports}"
-BUILD_PARALLEL="${BUILD_PARALLEL:-1}"  # Sequential build for reproducibility
+BUILD_PARALLEL="${BUILD_PARALLEL:-$(($(nproc)/4))}"
 
 # All paths relative to BUILD_ROOT_DIR
 TARGET_ROOTFS="$BUILD_ROOT_DIR/target-rootfs"
@@ -66,6 +66,12 @@ validate_pkg_name() {
 }
 
 ensure_host_deps() {
+  # Skip if already installed by build_parallel.sh
+  if [[ "${SKIP_HOST_DEPS:-0}" == "1" ]]; then
+    msg "Host dependencies already installed, skipping..."
+    return 0
+  fi
+  
   msg "Installing host dependencies..."
   apt-get update &>/dev/null || true
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -231,7 +237,11 @@ build_package() {
     fi
   fi
 
+  # Record build start time
+  local build_start_time=$(date +%s)
+  local build_start_readable=$(date)
   msg "Building package from source: $pkg${ver_clause}"
+  msg "Build started at: $build_start_readable"
   
   # Reset builder environment
   reset_builder
@@ -248,15 +258,21 @@ build_package() {
   msg "Starting build in chroot..."
   chroot "$BUILDER_WORK" bash -lc "
     set -e
-    export DEB_BUILD_OPTIONS=\"parallel=$BUILD_PARALLEL reproducible=+all\"
+    export DEB_BUILD_OPTIONS=\"parallel=$BUILD_PARALLEL\"
     export DEBIAN_FRONTEND=noninteractive
     export SYSTEMD_OFFLINE=1
-    export SOURCE_DATE_EPOCH=1640995200  # Fixed timestamp for reproducibility
     dpkg --configure -a || true
     apt-get update
     apt-get build-dep -y ${pkg}
     apt-get source ${pkg}${ver_clause}
-    cd \$(find . -maxdepth 1 -type d -name '${pkg}-*' | sort | head -n1)
+    # Find any source directory (handle package name vs source name mismatch)
+    source_dir=\$(find . -maxdepth 1 -type d ! -name '.' | head -n1)
+    if [[ -z \"\$source_dir\" ]]; then
+      echo \"ERROR: No source directory found after apt-get source ${pkg}\"
+      exit 1
+    fi
+    echo \"Found source directory: \$source_dir\"
+    cd \"\$source_dir\"
     dpkg-buildpackage -us -uc -b -j${BUILD_PARALLEL}
   " 2>&1 | tee "$LOGDIR/20_build_${pkg}.log"
 
@@ -277,7 +293,15 @@ build_package() {
     return 1
   fi
   
+  # Calculate and display build time
+  local build_end_time=$(date +%s)
+  local build_duration=$((build_end_time - build_start_time))
+  local hours=$((build_duration / 3600))
+  local minutes=$(((build_duration % 3600) / 60))
+  local seconds=$((build_duration % 60))
+  
   msg "Build completed successfully: $pkg ($deb_count packages created)"
+  msg "Build duration: ${hours}h ${minutes}m ${seconds}s (total: ${build_duration}s)"
   find "$OUTDIR/$pkg" -name '*.deb' | sed 's/^/  /'
 }
 

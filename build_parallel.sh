@@ -19,10 +19,15 @@
 set -euo pipefail
 
 # Default package list
+#PACKAGES=(
+#  bash coreutils grep sed findutils tar xz-utils 
+#  util-linux iproute2 netbase ca-certificates iputils-ping
+#  openssh-server binutils gdb
+#)  binutils iputils-ping openssh-server  
+
+# Default package list
 PACKAGES=(
-  bash coreutils grep sed findutils tar xz-utils e2fsprogs
-  util-linux iproute2 netbase ca-certificates iputils-ping
-  openssh-server binutils gdb
+  coreutils tar 
 )
 
 # Parse argument: clean, number (parallel) or package name (single)
@@ -77,6 +82,20 @@ else
 fi
 
 msg "Base build directory: $BUILD_BASE_DIR"
+
+# Install host dependencies once before starting parallel builds
+msg "Installing host dependencies for all builds..."
+ensure_host_deps() {
+  msg "Installing host dependencies..."
+  apt-get update &>/dev/null || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    debootstrap qemu-user-static binfmt-support qemu-system-misc \
+    build-essential devscripts debhelper dpkg-dev fakeroot quilt \
+    ubuntu-keyring debian-archive-keyring rsync e2fsprogs dosfstools \
+    parted ca-certificates curl &>/dev/null
+}
+ensure_host_deps
+export SKIP_HOST_DEPS=1  # Signal to build_single_package.sh to skip host deps
 
 # Create job control arrays
 declare -a BUILD_PIDS=()

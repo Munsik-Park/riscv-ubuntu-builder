@@ -354,8 +354,15 @@ build_package() {
     apt-get update
     apt-get build-dep -y ${pkg}
     apt-get source ${pkg}${ver_clause}
-    # Find any source directory (handle package name vs source name mismatch)
-    source_dir=\$(find . -maxdepth 1 -type d ! -name '.' | head -n1)
+    # Find source directory: exclude system directories, find package-version pattern
+    source_dir=\$(find . -maxdepth 1 -type d -name "*-*" 2>/dev/null | grep -v -E '^\\.(bin|lib|sbin|usr|var|etc|root|home|proc|sys|dev|tmp|run|boot|media|mnt|opt|srv)' | grep -v '\\.usr-is-merged' | head -n1)
+    if [[ -z \"\$source_dir\" ]]; then
+      # Fallback: use ls and grep to find non-system directories
+      source_dir=\$(ls -d */ 2>/dev/null | grep -v -E '^(bin|lib|sbin|usr|var|etc|root|home|proc|sys|dev|tmp|run|boot|media|mnt|opt|srv).*/' | head -n1 | sed 's|/$||')
+      if [[ -n \"\$source_dir\" ]]; then
+        source_dir=\"./\$source_dir\"
+      fi
+    fi
     if [[ -z \"\$source_dir\" ]]; then
       echo \"ERROR: No source directory found after apt-get source ${pkg}\"
       exit 1

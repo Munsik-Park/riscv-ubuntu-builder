@@ -206,21 +206,40 @@ force_kill_mount_users() {
   fi
   
   if [[ -n "$pids" ]]; then
-    msg "Terminating processes: $pids"
+    msg "Found processes using mount point: $pids"
     while IFS= read -r pid; do
       if [[ -n "$pid" && "$pid" -gt 1 ]]; then  # Never kill init
-        # Skip critical system processes
         local cmdline
         cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ' || true)
+        local root=$(sudo readlink "/proc/$pid/root" 2>/dev/null || echo "/")
+        
+        # Skip critical system processes
         if [[ "$cmdline" =~ (systemd|kernel|kthread) ]]; then
           warn "Skipping critical system process: $pid ($cmdline)"
           continue
         fi
         
-        msg "Killing process $pid: $cmdline"
-        kill -TERM "$pid" 2>/dev/null || true
-        sleep 1
-        kill -KILL "$pid" 2>/dev/null || true
+        # Skip VSCode processes - they should not be killed during mount cleanup
+        if [[ "$cmdline" =~ (vscode-server|code-server|command-shell) ]]; then
+          warn "Skipping VSCode process: $pid ($cmdline)"
+          continue
+        fi
+        
+        # Skip other user applications that might be using the filesystem
+        if [[ "$cmdline" =~ (ssh|bash|zsh|nano|vim|emacs|git) && "$root" == "/" ]]; then
+          warn "Skipping user application: $pid ($cmdline)"
+          continue
+        fi
+        
+        # Only kill if it's clearly a build-related process or in chroot
+        if [[ "$cmdline" =~ (build_single_package|dpkg-buildpackage|gcc|make) || "$root" =~ /srv/rvbuild-.*/builder$ ]]; then
+          msg "[FORCE] Killing build process $pid: $cmdline"
+          kill -TERM "$pid" 2>/dev/null || true
+          sleep 1
+          kill -KILL "$pid" 2>/dev/null || true
+        else
+          warn "Skipping non-build process: $pid ($cmdline)"
+        fi
       fi
     done <<< "$pids"
     sleep 2  # Allow processes to die
@@ -294,57 +313,104 @@ wait_for_process_termination() {
 cleanup_processes() {
   msg "Terminating running build processes..."
   
-  local pids
+  # Function to check if process is safe to kill
+  is_safe_to_kill() {
+    local pid="$1"
+    local root=$(sudo readlink "/proc/$pid/root" 2>/dev/null || echo "/")
+    local cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ' || echo "")
+    
+    # Only kill if it's a build process AND (chroot process OR build script on host)
+    if [[ "$cmdline" =~ build_single_package\.sh ]]; then
+      # Allow killing if it's in chroot environment
+      if [[ "$root" =~ /srv/rvbuild-.*/builder$ ]]; then
+        return 0  # Safe to kill - chroot process
+      fi
+      # Allow killing if it's the main build script on host (but warn)
+      if [[ "$root" == "/" && "$cmdline" =~ /home/ubuntu/riscv-ubuntu-builder/build_single_package\.sh ]]; then
+        warn "Killing host build process: PID $pid"
+        return 0  # Safe to kill - host build script
+      fi
+    fi
+    return 1  # Not safe to kill
+  }
+  
+  local pids safe_pids=()
   # Look for actual build processes only
   pids=$(ps aux | grep -E "build_single_package\.sh" | grep -v grep | awk '{print $2}' || true)
   
+  # Filter to only safe-to-kill processes
   if [[ -n "$pids" ]]; then
-    # Step 1: Send TERM signal to all processes
     while IFS= read -r pid; do
-      if [[ -n "$pid" ]]; then
-        msg "Sending TERM signal to PID: $pid"
-        kill -TERM "$pid" 2>/dev/null || warn "Failed to terminate PID: $pid"
+      if [[ -n "$pid" ]] && is_safe_to_kill "$pid"; then
+        safe_pids+=("$pid")
+      elif [[ -n "$pid" ]]; then
+        warn "Skipping non-build process: PID $pid"
       fi
     done <<< "$pids"
-    
-    # Step 2: Wait for each process to terminate gracefully
-    msg "Waiting for processes to terminate gracefully..."
-    while IFS= read -r pid; do
-      if [[ -n "$pid" ]]; then
-        if ! wait_for_process_termination "$pid" 15; then
-          warn "Process $pid did not respond to TERM signal"
-        fi
-      fi
-    done <<< "$pids"
-    
-    # Step 3: Check for remaining processes and force kill if necessary
-    sleep 2  # Additional safety buffer
-    pids=$(ps aux | grep -E "build_single_package\.sh" | grep -v grep | awk '{print $2}' || true)
-    if [[ -n "$pids" ]]; then
-      msg "Force killing remaining processes..."
-      while IFS= read -r pid; do
-        if [[ -n "$pid" ]]; then
-          msg "Force killing PID: $pid"
-          kill -KILL "$pid" 2>/dev/null || warn "Failed to kill PID: $pid"
-          # Wait for force kill to take effect
-          wait_for_process_termination "$pid" 5 || warn "Process $pid may still be running"
-        fi
-      done <<< "$pids"
-    fi
-    
-    # Step 4: Final verification
-    sleep 1
-    local remaining_pids
-    remaining_pids=$(ps aux | grep -E "build_single_package\.sh" | grep -v grep | awk '{print $2}' || true)
-    if [[ -n "$remaining_pids" ]]; then
-      err "Some processes are still running after cleanup:"
-      ps aux | grep -E "build_single_package\.sh" | grep -v grep || true
-      return 1
-    else
-      msg "All build processes terminated successfully"
-    fi
-  else
+  fi
+  
+  if [[ ${#safe_pids[@]} -eq 0 ]]; then
     msg "No build processes found to terminate"
+    return 0
+  fi
+  
+  # Step 1: Send TERM signal to safe processes
+  for pid in "${safe_pids[@]}"; do
+    msg "Sending TERM signal to safe PID: $pid"
+    kill -TERM "$pid" 2>/dev/null || warn "Failed to terminate PID: $pid"
+  done
+  
+  # Step 2: Wait for each process to terminate gracefully
+  msg "Waiting for processes to terminate gracefully..."
+  for pid in "${safe_pids[@]}"; do
+    if ! wait_for_process_termination "$pid" 15; then
+      warn "Process $pid did not respond to TERM signal"
+    fi
+  done
+  
+  # Step 3: Check for remaining safe processes and force kill if necessary
+  sleep 2  # Additional safety buffer
+  local remaining_safe_pids=()
+  pids=$(ps aux | grep -E "build_single_package\.sh" | grep -v grep | awk '{print $2}' || true)
+  if [[ -n "$pids" ]]; then
+    while IFS= read -r pid; do
+      if [[ -n "$pid" ]] && is_safe_to_kill "$pid"; then
+        remaining_safe_pids+=("$pid")
+      fi
+    done <<< "$pids"
+  fi
+  
+  if [[ ${#remaining_safe_pids[@]} -gt 0 ]]; then
+    msg "Force killing remaining safe processes..."
+    for pid in "${remaining_safe_pids[@]}"; do
+      msg "Force killing safe PID: $pid"
+      kill -KILL "$pid" 2>/dev/null || warn "Failed to kill PID: $pid"
+      # Wait for force kill to take effect
+      wait_for_process_termination "$pid" 5 || warn "Process $pid may still be running"
+    done
+  fi
+  
+  # Step 4: Final verification - only check safe processes
+  sleep 1
+  local final_safe_pids=()
+  pids=$(ps aux | grep -E "build_single_package\.sh" | grep -v grep | awk '{print $2}' || true)
+  if [[ -n "$pids" ]]; then
+    while IFS= read -r pid; do
+      if [[ -n "$pid" ]] && is_safe_to_kill "$pid"; then
+        final_safe_pids+=("$pid")
+      fi
+    done <<< "$pids"
+  fi
+  
+  if [[ ${#final_safe_pids[@]} -gt 0 ]]; then
+    err "Some build processes are still running after cleanup:"
+    for pid in "${final_safe_pids[@]}"; do
+      cmd=$(ps -p "$pid" -o cmd --no-headers 2>/dev/null || echo "Unknown")
+      echo "  PID $pid: $cmd"
+    done
+    return 1
+  else
+    msg "All build processes terminated successfully"
   fi
 }
 

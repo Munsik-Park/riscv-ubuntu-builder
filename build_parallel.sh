@@ -25,14 +25,54 @@ set -euo pipefail
 #  openssh-server binutils gdb
 #) 
 
-# Default package list
-PACKAGES=(
-  coreutils tar binutils iputils-ping openssh-server  
-)
+# Load package list from external file
+PACKAGE_LIST_FILE="${PACKAGE_LIST_FILE:-$(dirname "$0")/build_packages.list}"
+
+load_packages() {
+  local packages=()
+  local line_num=0
+  
+  if [[ ! -f "$PACKAGE_LIST_FILE" ]]; then
+    err "Package list file not found: $PACKAGE_LIST_FILE"
+    err "Please create the file or set PACKAGE_LIST_FILE environment variable"
+    exit 1
+  fi
+  
+  msg "Loading package list from: $PACKAGE_LIST_FILE"
+  
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    ((line_num++))
+    # Skip empty lines and comments
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    
+    # Remove leading/trailing whitespace
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [[ -z "$line" ]] && continue
+    
+    # Validate package name (basic validation)
+    if [[ ! "$line" =~ ^[a-zA-Z0-9][a-zA-Z0-9+.-]*$ ]]; then
+      warn "Invalid package name at line $line_num: '$line' - skipping"
+      continue
+    fi
+    
+    packages+=("$line")
+  done < "$PACKAGE_LIST_FILE"
+  
+  if [[ ${#packages[@]} -eq 0 ]]; then
+    err "No valid packages found in $PACKAGE_LIST_FILE"
+    exit 1
+  fi
+  
+  msg "Loaded ${#packages[@]} packages: ${packages[*]}"
+  printf '%s\n' "${packages[@]}"
+}
 
 # Parse argument: clean, number (parallel) or package name (single)
 ARG1="${1:-2}"
 BUILD_BASE_DIR="${BUILD_BASE_DIR:-/srv}"
+
+# Initialize BUILD_MODE first
+BUILD_MODE="INIT"
 
 # Check if argument is clean command, number, or package name
 if [[ "$ARG1" == "clean" ]]; then
@@ -49,6 +89,9 @@ else
   SINGLE_PACKAGE="$ARG1"
   BUILD_MODE="SINGLE"
 fi
+
+# Load packages from external file after BUILD_MODE is set
+PACKAGES=($(load_packages))
 
 msg() { echo -e "\033[1;32m[$(date +'%H:%M:%S')] [$BUILD_MODE] $*\033[0m"; }
 warn() { echo -e "\033[1;33m[$(date +'%H:%M:%S')] [$BUILD_MODE] $*\033[0m"; }

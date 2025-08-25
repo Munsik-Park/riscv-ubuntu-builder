@@ -227,26 +227,6 @@ DNS=1.1.1.1
 LinkLocalAddressing=ipv4
 EOF
 
-# Configure DNS fallback
-mkdir -p /etc/systemd/resolved.conf.d
-cat > /etc/systemd/resolved.conf.d/dns.conf << 'EOF'
-[Resolve]
-DNS=8.8.8.8
-DNS=1.1.1.1
-FallbackDNS=8.8.4.4
-Domains=~
-DNSSEC=no
-DNSOverTLS=no
-EOF
-
-# Setup resolv.conf for DNS resolution
-rm -f /etc/resolv.conf
-ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
-
-# Add fallback DNS servers
-echo "nameserver 8.8.8.8" > /etc/resolv.conf.fallback
-echo "nameserver 1.1.1.1" >> /etc/resolv.conf.fallback
-
 # Configure SSH
 mkdir -p /home/builder/.ssh /etc/ssh/sshd_config.d
 chmod 700 /home/builder/.ssh
@@ -314,7 +294,10 @@ apt-get install -y linux-image-generic linux-headers-generic || echo "Warning: G
 apt-get install -y linux-image-riscv64 linux-headers-riscv64 2>/dev/null || echo "RISC-V specific kernel not available"
 
 # Install GRUB packages
-apt-get install -y grub-common grub2-common grub-efi-riscv64 || apt-get install -y grub-pc || echo "Warning: GRUB installation may fail"
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold" \
+  grub-common grub2-common grub-efi-riscv64 || apt-get install -y grub-pc || echo "Warning: GRUB installation may fail"
 
 # Verify kernel installation
 echo "Checking installed kernels..."
@@ -357,9 +340,28 @@ apt-get install -y \
 mkdir -p /home/builder/{build,output,logs}
 chown -R builder:builder /home/builder/{build,output,logs}
 
-# Set up environment for builder user
-cat >> /home/builder/.bashrc << 'EOF'
+# Final DNS configuration for the running system
+# This is done last, as it breaks DNS resolution within the chroot build environment.
+# The build process relies on the /etc/resolv.conf created by the host script.
 
+# Configure DNS fallback for systemd-resolved
+mkdir -p /etc/systemd/resolved.conf.d
+cat > /etc/systemd/resolved.conf.d/dns.conf << 'EOF_DNS'
+[Resolve]
+DNS=8.8.8.8
+DNS=1.1.1.1
+FallbackDNS=8.8.4.4
+Domains=~
+DNSSEC=no
+DNSOverTLS=no
+EOF_DNS
+
+# Point /etc/resolv.conf to the systemd-resolved stub resolver
+rm -f /etc/resolv.conf
+ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+
+# Set up environment for builder user
+cat >> /home/builder/.bashrc << 'EOF_BASHRC'
 # Build environment setup
 export DEBIAN_FRONTEND=noninteractive
 export DEB_BUILD_OPTIONS="parallel=1 reproducible=+all"
@@ -404,7 +406,7 @@ build-package() {
     echo "Build completed. Results in /home/builder/output/"
 }
 
-EOF
+EOF_BASHRC
 
 EOCHROOT
 
@@ -479,8 +481,58 @@ create_base_disk_image() {
   ls -la "$mount_point/boot/" || echo "Warning: /boot directory missing"
   ls -la "$mount_point/lib/modules/" || echo "Warning: /lib/modules directory missing"
   
-  # Install GRUB bootloader to disk
-  msg "Installing GRUB bootloader to disk..."
+  # Create U-Boot auto-boot script
+  msg "Creating U-Boot auto-boot script..."
+  
+  # Install u-boot-tools if not present
+  if ! command -v mkimage >/dev/null 2>&1; then
+    msg "Installing u-boot-tools for boot script creation..."
+    apt-get update && apt-get install -y u-boot-tools
+  fi
+  
+  # Create boot script source
+  cat > "/tmp/boot.cmd" << 'EOF_BOOT'
+# U-Boot auto-boot script for Ubuntu RISC-V
+echo "=== Ubuntu RISC-V Auto-Boot ==="
+echo "Loading Ubuntu RISC-V kernel..."
+
+# Set boot arguments
+setenv bootargs "root=/dev/vda1 rw rootwait console=ttyS0,115200 earlycon=sbi init=/sbin/init"
+
+# Scan for virtio devices
+echo "Scanning virtio devices..."
+virtio scan
+
+# Load kernel (skip initrd due to format issues)
+echo "Loading kernel from /boot/vmlinuz-6.14.0-28-generic..."
+if ext4load virtio 0:1 0x84000000 /boot/vmlinuz-6.14.0-28-generic; then
+    echo "Kernel loaded successfully"
+    echo "Booting kernel without initrd..."
+    booti 0x84000000 - ${fdtcontroladdr}
+else
+    echo "Failed to load kernel, dropping to U-Boot shell"
+fi
+EOF_BOOT
+  
+  # Compile boot script
+  mkimage -C none -A riscv -T script -d "/tmp/boot.cmd" "/tmp/boot.scr.uimg"
+  
+  # Install boot script to image
+  msg "Installing boot script to /boot directory..."
+  cp "/tmp/boot.scr.uimg" "$mount_point/boot/boot.scr.uimg"
+  cp "/tmp/boot.scr.uimg" "$mount_point/boot.scr.uimg"
+  cp "/tmp/boot.scr.uimg" "$mount_point/boot.scr"
+  
+  # Set proper permissions
+  chmod 644 "$mount_point"/boot/boot.*
+  
+  # Cleanup temporary files
+  rm -f "/tmp/boot.cmd" "/tmp/boot.scr.uimg"
+  
+  msg "U-Boot auto-boot script installed"
+  
+  # Install GRUB bootloader to disk (as backup)
+  msg "Installing GRUB bootloader as backup..."
   if [[ -f "$mount_point/usr/sbin/grub-install" ]]; then
     # Mount required filesystems for GRUB installation
     mount -t proc proc "$mount_point/proc"
@@ -489,7 +541,7 @@ create_base_disk_image() {
     
     # Install GRUB using chroot
     chroot "$mount_point" /bin/bash -c "
-      grub-install --target=i386-pc --boot-directory=/boot $loop_device
+      grub-install --target=riscv64-efi --boot-directory=/boot --efi-directory=/boot --removable 2>/dev/null || echo 'GRUB EFI install failed, trying legacy'
       update-grub
     " || echo "Warning: GRUB installation failed"
     

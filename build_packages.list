@@ -9,10 +9,10 @@
 # (bash, coreutils, grep, sed, findutils, tar, util-linux는 이미 chroot에 포함)
 
 # 현재 빌드 중인 패키지들 (3개)
-binutils
-iputils-ping 
-openssh-server
-coreutils
+# binutils
+iputils-ping
+# openssh-server
+# coreutils
 tar
 
 # 추가로 빌드해야 할 패키지들 (5개)

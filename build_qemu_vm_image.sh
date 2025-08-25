@@ -189,20 +189,52 @@ EOF
 # Configure sudo
 echo 'builder ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/builder
 
+# Configure complete apt repositories for RISC-V
+echo "Configuring apt repositories with universe and multiverse..."
+cat > /etc/apt/sources.list << 'EOF'
+deb http://ports.ubuntu.com/ubuntu-ports/ noble main restricted universe multiverse
+deb http://ports.ubuntu.com/ubuntu-ports/ noble-updates main restricted universe multiverse  
+deb http://ports.ubuntu.com/ubuntu-ports/ noble-security main restricted universe multiverse
+deb http://ports.ubuntu.com/ubuntu-ports/ noble-backports main restricted universe multiverse
+
+deb-src http://ports.ubuntu.com/ubuntu-ports/ noble main restricted universe multiverse
+deb-src http://ports.ubuntu.com/ubuntu-ports/ noble-updates main restricted universe multiverse  
+deb-src http://ports.ubuntu.com/ubuntu-ports/ noble-security main restricted universe multiverse
+deb-src http://ports.ubuntu.com/ubuntu-ports/ noble-backports main restricted universe multiverse
+EOF
+
+# Remove any conflicting sources
+rm -f /etc/apt/sources.list.d/ubuntu.sources
+
 # Update package lists and upgrade system
 apt-get update
 apt-get upgrade -y
 
-# Install additional development tools
+# Install additional development tools (with error handling)
+echo "Installing development tools..."
+
+# Essential tools first
 apt-get install -y \
-  autotools-dev automake autoconf pkg-config libtool gettext texinfo \
-  bison flex gawk net-tools htop tree lsof strace gdb file less rsync \
-  cmake meson ninja-build \
+  autotools-dev automake autoconf pkg-config libtool gettext \
+  bison flex gawk net-tools htop tree lsof strace file less rsync \
   python3-dev python3-pip python3-setuptools \
   libssl-dev libxml2-dev libxslt1-dev \
   zlib1g-dev libbz2-dev liblzma-dev \
-  libffi-dev libreadline-dev libsqlite3-dev \
-  ccache distcc || echo "Warning: Some packages may not be available for RISC-V"
+  libffi-dev libreadline-dev libsqlite3-dev || echo "Warning: Some essential packages failed"
+
+# Install additional tools (should now be available with universe)
+apt-get install -y \
+  texinfo gdb cmake meson ninja-build \
+  || echo "Warning: Some additional tools may not be available"
+
+# Optional optimization tools
+for pkg in ccache distcc; do
+  if apt-get install -y "$pkg" 2>/dev/null; then
+    echo "Installed: $pkg"
+  else
+    echo "Warning: $pkg not available for RISC-V"
+  fi
+done
 
 # Configure ccache for faster rebuilds
 echo 'export PATH="/usr/lib/ccache:$PATH"' >> /etc/profile.d/ccache.sh

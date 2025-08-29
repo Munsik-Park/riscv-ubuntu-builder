@@ -151,23 +151,23 @@ install_package_dependencies() {
 set -e
 
 # Update package lists
-apt-get update
+sudo apt-get update
 
 # Try to install build dependencies for the specific package
 echo "Installing build dependencies for: $PACKAGE_NAME"
-if apt-get build-dep -y "$PACKAGE_NAME" 2>&1 | tee /tmp/build-dep.log; then
+if sudo apt-get build-dep -y "$PACKAGE_NAME" 2>&1 | tee /tmp/build-dep.log; then
     echo "Build dependencies installed successfully"
 else
     echo "Warning: Some build dependencies may not be available"
     echo "Installing common build tools instead..."
-    apt-get install -y \
+    sudo apt-get install -y \
         autotools-dev automake autoconf pkg-config libtool gettext \
         bison flex gawk 2>/dev/null || true
 fi
 
 # Clean up to reduce snapshot size
-apt-get clean
-rm -rf /var/lib/apt/lists/*
+sudo apt-get clean
+sudo rm -rf /var/lib/apt/lists/*
 rm -f /tmp/build-dep.log
 
 # Mark dependencies as installed
@@ -279,5 +279,5 @@ msg "To start the VM:"
 msg "  $VM_DIR/start-vm.sh"
 msg ""
 msg "To connect via SSH:"
-msg "  ssh -i /srv/ssh-keys/builder_key -p $SSH_PORT builder@localhost"
+msg "  ssh -i /srv/ssh-keys/builder_key -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null builder@localhost"
 msg "=================================="

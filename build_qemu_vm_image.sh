@@ -324,8 +324,8 @@ apt-get build-dep -y $PACKAGE_NAME || {
     pkg-config libtool gettext texinfo bison flex gawk
 }
 
-# Install additional useful tools for debugging
-apt-get install -y gdb strace ltrace lsof htop tree
+# Install additional useful tools for debugging (ltrace not available on RISC-V)
+apt-get install -y gdb strace lsof htop tree
 
 # Clean up to reduce image size
 apt-get clean
@@ -485,6 +485,6 @@ msg "To start the VM:"
 msg "  $VM_DIR/start-vm.sh"
 msg ""
 msg "To connect via SSH:"
-msg "  ssh -p $SSH_PORT root@localhost"
-msg "  ssh -p $SSH_PORT builder@localhost"
+msg "  ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost"
+msg "  ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null builder@localhost"
 msg "=================================="

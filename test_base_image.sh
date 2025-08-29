@@ -286,7 +286,7 @@ ssh_test_connection() {
   local elapsed=0
   
   while [[ $elapsed -lt $ssh_timeout ]]; do
-    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -p "$SSH_PORT" builder@localhost 'echo "SSH connection successful"' 2>/dev/null; then
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SSH_PORT" builder@localhost 'echo "SSH connection successful"' 2>/dev/null; then
       msg "SUCCESS: SSH connection established"
       return 0
     fi
@@ -312,8 +312,8 @@ show_vm_info() {
   msg "SSH Port: $SSH_PORT"
   msg ""
   msg "After boot, connect with:"
-  msg "  ssh -p $SSH_PORT builder@localhost"
-  msg "  ssh -p $SSH_PORT root@localhost"
+  msg "  ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null builder@localhost"
+  msg "  ssh -p $SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost"
   msg ""
   msg "Default credentials:"
   msg "  root:root"

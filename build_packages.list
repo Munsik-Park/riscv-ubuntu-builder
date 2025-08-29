@@ -6,18 +6,25 @@
 # - 빈 줄은 무시됨
 #
 # 초기 목표: 15개 패키지 중 chroot에 없는 8개 패키지 빌드
-# (bash, coreutils, grep, sed, findutils, tar, util-linux는 이미 chroot에 포함)
+
+bash
+coreutils
+grep
+sed
+findutils
+tar
+util-linux
 
 # 현재 빌드 중인 패키지들 (3개)
-# binutils
+binutils
 iputils-ping
-# openssh-server
-# coreutils
+openssh-server
+coreutils
 tar
 
 # 추가로 빌드해야 할 패키지들 (5개)
-# xz-utils
-# iproute2
-# netbase
-# ca-certificates
-# gdb
+xz-utils
+iproute2
+netbase
+ca-certificates
+gdb

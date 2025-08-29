@@ -1,0 +1,50 @@
+# seeds/minimal.seed
+# base
+base-files
+base-passwd
+dash
+bash
+coreutils
+sed
+grep
+gawk
+diffutils
+findutils
+tar
+xz-utils
+gzip
+bzip2
+file
+hostname
+login
+passwd
+procps
+init
+systemd
+systemd-sysv
+udev
+util-linux
+mount
+e2fsprogs
+kbd
+kbdcontrol | console-setup
+
+# networking
+iproute2
+iputils-ping
+netbase
+isc-dhcp-client | systemd-networkd
+openssh-server
+ca-certificates
+curl
+wget
+
+# package management
+apt
+gnupg
+ubuntu-keyring
+
+# userspace dev essentials (작게)
+build-essential
+make
+pkg-config

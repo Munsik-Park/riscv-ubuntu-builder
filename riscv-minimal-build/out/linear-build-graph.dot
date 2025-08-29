@@ -1,0 +1,42 @@
+digraph LinearBuildOrder {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightgreen];
+    
+    "apt" -> "base-files";
+    "base-files" -> "base-passwd";
+    "base-passwd" -> "bash";
+    "bash" -> "build-essential";
+    "build-essential" -> "bzip2";
+    "bzip2" -> "ca-certificates";
+    "ca-certificates" -> "coreutils";
+    "coreutils" -> "curl";
+    "curl" -> "dash";
+    "dash" -> "diffutils";
+    "diffutils" -> "e2fsprogs";
+    "e2fsprogs" -> "file";
+    "file" -> "findutils";
+    "findutils" -> "gawk";
+    "gawk" -> "gnupg2";
+    "gnupg2" -> "grep";
+    "grep" -> "gzip";
+    "gzip" -> "hostname";
+    "hostname" -> "init-system-helpers";
+    "init-system-helpers" -> "iproute2";
+    "iproute2" -> "iputils";
+    "iputils" -> "isc-dhcp-client";
+    "isc-dhcp-client" -> "kbd";
+    "kbd" -> "kbdcontrol";
+    "kbdcontrol" -> "make-dfsg";
+    "make-dfsg" -> "netbase";
+    "netbase" -> "openssh";
+    "openssh" -> "pkgconf";
+    "pkgconf" -> "procps";
+    "procps" -> "sed";
+    "sed" -> "shadow";
+    "shadow" -> "systemd";
+    "systemd" -> "tar";
+    "tar" -> "ubuntu-keyring";
+    "ubuntu-keyring" -> "util-linux";
+    "util-linux" -> "wget";
+    "wget" -> "xz-utils";
+}

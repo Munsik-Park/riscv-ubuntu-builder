@@ -1,0 +1,43 @@
+digraph BuildOrder {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue];
+    
+    // Core system packages (no dependencies)
+    subgraph cluster_core {
+        label="Core System";
+        color=red;
+        "base-files" -> "base-passwd";
+        "base-passwd" -> "bash";
+        "bash" -> "coreutils";
+    }
+    
+    // Build tools
+    subgraph cluster_build {
+        label="Build Tools";  
+        color=green;
+        "make" -> "build-essential";
+        "pkg-config" -> "build-essential";
+    }
+    
+    // System services
+    subgraph cluster_system {
+        label="System Services";
+        color=blue;
+        "systemd" -> "systemd-sysv";
+        "udev" -> "systemd";
+    }
+    
+    // Network tools
+    subgraph cluster_network {
+        label="Network";
+        color=orange;
+        "netbase" -> "iproute2";
+        "iproute2" -> "iputils-ping";
+        "iputils-ping" -> "openssh-server";
+    }
+    
+    // Dependencies between clusters
+    "coreutils" -> "make";
+    "bash" -> "systemd";
+    "base-files" -> "netbase";
+}

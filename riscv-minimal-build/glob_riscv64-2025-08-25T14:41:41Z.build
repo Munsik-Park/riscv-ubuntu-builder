@@ -1,0 +1,50 @@
+sbuild (Debian sbuild) 0.85.10ubuntu0.2 (02 May 2025) on one-cattle.maas
+
++==============================================================================+
+| glob (riscv64)                               Mon, 25 Aug 2025 14:41:41 +0000 |
++==============================================================================+
+
+Package: glob
+Distribution: noble
+Machine Architecture: amd64
+Host Architecture: riscv64
+Build Architecture: riscv64
+Build Type: binary
+
+I: NOTICE: Log filtering will replace 'var/run/schroot/mount/noble-riscv64-sbuild-b7f17e8d-be17-49ad-a163-005a4f3ad8d1' with '<<CHROOT>>'
+I: NOTICE: Log filtering will replace 'build/glob-u9P6oV/resolver-vBj61n' with '<<RESOLVERDIR>>'
+
++------------------------------------------------------------------------------+
+| Update chroot                                Mon, 25 Aug 2025 14:41:45 +0000 |
++------------------------------------------------------------------------------+
+
+Get:1 file:/home/ubuntu/riscv-minimal-build/repo/public noble InRelease
+Ign:1 file:/home/ubuntu/riscv-minimal-build/repo/public noble InRelease
+Get:2 file:/home/ubuntu/riscv-minimal-build/repo/public noble Release
+Err:2 file:/home/ubuntu/riscv-minimal-build/repo/public noble Release
+  File not found - /home/ubuntu/riscv-minimal-build/repo/public/dists/noble/Release (2: No such file or directory)
+Reading package lists...
+E: The repository 'file:/home/ubuntu/riscv-minimal-build/repo/public noble Release' no longer has a Release file.
+E: apt-get update failed
+
++------------------------------------------------------------------------------+
+| Summary                                      Mon, 25 Aug 2025 14:41:48 +0000 |
++------------------------------------------------------------------------------+
+
+Build Architecture: riscv64
+Build Type: binary
+Build-Space: 0
+Build-Time: 0
+Distribution: noble
+Fail-Stage: apt-get-update
+Host Architecture: riscv64
+Install-Time: 0
+Job: glob
+Machine Architecture: amd64
+Package: glob
+Package-Time: 0
+Space: 0
+Status: failed
+--------------------------------------------------------------------------------
+Finished at 2025-08-25T14:41:41Z
+Build needed 00:00:00, 0k disk space

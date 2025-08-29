@@ -1,0 +1,35 @@
+digraph BuildGraph {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue];
+    
+    // Essential packages
+    "base-files" [fillcolor=red];
+    "base-passwd" [fillcolor=red]; 
+    "bash" [fillcolor=red];
+    
+    // Core dependencies
+    "base-files" -> "base-passwd";
+    "base-passwd" -> "bash";
+    "bash" -> "coreutils";
+    
+    // Build chain
+    "coreutils" -> "make";
+    "make" -> "build-essential";
+    
+    // System services  
+    "bash" -> "systemd";
+    "systemd" -> "udev";
+    
+    // Package management
+    "base-files" -> "apt";
+    
+    // Compression tools
+    "coreutils" -> "gzip";
+    "gzip" -> "bzip2"; 
+    "bzip2" -> "xz-utils";
+    
+    // Network stack
+    "base-files" -> "netbase";
+    "netbase" -> "iproute2";
+    "iproute2" -> "openssh-server";
+}

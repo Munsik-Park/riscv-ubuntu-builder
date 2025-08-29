@@ -1,0 +1,8 @@
+$build_arch_all = 1;
+$run_lintian = 0;
+$verbose = 1;
+$builddir = '/build';
+$clean_source = 0;
+$dist = 'noble';
+$jobs = $ENV{'JOBS'} // 16;
+$deb_build_options = "parallel=$jobs nocheck";

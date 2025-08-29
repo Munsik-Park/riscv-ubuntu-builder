@@ -1,0 +1,3 @@
+digraph structure {
+    node [color=lightblue2, style=filled];
+}
